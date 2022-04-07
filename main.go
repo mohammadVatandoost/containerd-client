@@ -3,14 +3,16 @@ package main
 import (
 	"context"
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/sirupsen/logrus"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"time"
 )
 
-const WordPressNameSpace = "word-press"
+const (
+	WordPressNameSpace = "wordpress"
+	WordPressImageName = "docker.io/library/wordpress:php8.1-apache"
+)
 
 
 func main() {
@@ -30,26 +32,30 @@ func main() {
 	ctx,cnl := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cnl()
 
-	nameSpaces, err := client.NamespaceService().List(ctx)
+	err = PullImage(client, WordPressNameSpace, WordPressImageName)
 	if err != nil {
-		logrus.WithError(err).Error("client nameSpaces")
+		logrus.WithError(err).Error("client PullImage")
 		return
 	}
 
-	for _, nameSpace := range nameSpaces {
-		logrus.Infof("nameSpace: %v", nameSpace)
 
-		imagesList, err := client.ListImages( namespaces.WithNamespace(ctx, nameSpace))
+
+		imagesList, err := client.ListImages( namespaces.WithNamespace(ctx, WordPressNameSpace))
 		if err != nil {
 			logrus.WithError(err).Error("client ListImages")
 			return
 		}
-
+		logrus.Info("============")
 		for _, image := range imagesList {
 			logrus.Infof("image name: %v", image.Name())
+			ok, err := image.IsUnpacked(ctx, "btrfs")
+			if err != nil {
+				logrus.WithError(err).Error("client IsUnpacked")
+				return
+			}
+			logrus.Infof("IsUnpacked btrfs: %v", ok)
 		}
 		logrus.Info("============")
-	}
 }
 
 func CreateNameSpace(client *containerd.Client, nameSpace string) error {
@@ -57,9 +63,19 @@ func CreateNameSpace(client *containerd.Client, nameSpace string) error {
 	defer cnl()
     err := client.NamespaceService().Create(namespaces.WithNamespace(ctx, nameSpace),
 		nameSpace, make(map[string]string))
-	s, ok := status.FromError(err)
-	if ok && s.Code() == codes.AlreadyExists {
+
+	if errdefs.IsAlreadyExists(err) {
 		return nil
 	}
+	return err
+}
+
+func PullImage(client *containerd.Client, nameSpace string, imageName string) error {
+	//ctx,cnl := context.WithTimeout(context.Background(), 1000*time.Second)
+	//defer cnl()
+
+
+	_, err := client.Pull(namespaces.WithNamespace(context.Background(), nameSpace),imageName)
+
 	return err
 }
