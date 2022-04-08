@@ -2,20 +2,26 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/namespaces"
+	"github.com/containerd/containerd/oci"
 	"github.com/sirupsen/logrus"
+	"os"
 	"time"
 )
 
 const (
 	WordPressNameSpace = "wordpress"
 	WordPressImageName = "docker.io/library/wordpress:php8.1-apache"
+	SnapShotterFormat = "native"
+	SpecFileName = "config.json"
+	ContainerName = "wordpress-containerd"
 )
 
-
 func main() {
+	startTime := time.Now()
 	client, err := containerd.New("/run/containerd/containerd.sock")
 	if err != nil {
 		logrus.WithError(err).Error("containerd new client")
@@ -38,24 +44,74 @@ func main() {
 		return
 	}
 
+	ctxWithNameSpace := namespaces.WithNamespace(ctx, WordPressNameSpace)
+	wordPressImage, err := client.GetImage(ctxWithNameSpace,WordPressImageName)
+	if err != nil {
+		logrus.WithError(err).Error("client GetImage")
+		return
+	}
 
-
-		imagesList, err := client.ListImages( namespaces.WithNamespace(ctx, WordPressNameSpace))
+	ok, err := wordPressImage.IsUnpacked(ctxWithNameSpace, SnapShotterFormat)
+	if err != nil {
+		logrus.WithError(err).Error("client IsUnpacked")
+		return
+	}
+	if !ok {
+		logrus.Infof("unpack image: %v", wordPressImage.Name())
+		err = wordPressImage.Unpack(ctxWithNameSpace, "")
 		if err != nil {
-			logrus.WithError(err).Error("client ListImages")
+			logrus.WithError(err).Error("client Unpack")
 			return
 		}
-		logrus.Info("============")
-		for _, image := range imagesList {
-			logrus.Infof("image name: %v", image.Name())
-			ok, err := image.IsUnpacked(ctx, "btrfs")
-			if err != nil {
-				logrus.WithError(err).Error("client IsUnpacked")
-				return
-			}
-			logrus.Infof("IsUnpacked btrfs: %v", ok)
+	}
+
+	container, err := client.NewContainer(ctxWithNameSpace, ContainerName,
+		containerd.WithNewSnapshot(WordPressImageName+"-rootfs", wordPressImage),
+		containerd.WithNewSpec(oci.WithImageConfig(wordPressImage)))
+	if err != nil {
+		logrus.WithError(err).Error("client NewContainer")
+		return
+	}
+	defer func() {
+		err := client.ContainerService().Delete(ctxWithNameSpace, ContainerName)
+		if err != nil {
+			logrus.WithError(err).Error("client ContainerService Delete")
 		}
-		logrus.Info("============")
+	}()
+	logrus.Infof("container ID: %v", container.ID())
+	spec, err := container.Spec(ctxWithNameSpace)
+	if err != nil {
+		logrus.WithError(err).Error("client NewContainer")
+		return
+	}
+	b, err := json.Marshal(spec)
+	if err != nil {
+		logrus.WithError(err).Error("client NewContainer")
+		return
+	}
+
+	err = WriteSpecToFile(SpecFileName, b)
+	if err != nil {
+		logrus.WithError(err).Error("WriteSpecToFile")
+		return
+	}
+	//logrus.Info("============")
+	//for _, image := range imagesList {
+	//	logrus.Infof("image name: %v", image.Name())
+	//	ok, err := image.IsUnpacked(ctxWithNameSpace, SnapShotterFormat)
+	//	if err != nil {
+	//		logrus.WithError(err).Error("client IsUnpacked")
+	//		return
+	//	}
+	//	//if !ok {
+	//	//	image.Unpack(ctxWithNameSpace, SnapShotterFormat)
+	//	//}
+	//	image.
+	//	logrus.Infof("IsUnpacked btrfs: %v", ok)
+	//}
+	//client.NewContainer(ctxWithNameSpace, WordPressImageName+"test", )
+	logrus.Infof("====== duration: %v ms ======", time.Now().Sub(startTime).Milliseconds())
+
 }
 
 func CreateNameSpace(client *containerd.Client, nameSpace string) error {
@@ -73,9 +129,26 @@ func CreateNameSpace(client *containerd.Client, nameSpace string) error {
 func PullImage(client *containerd.Client, nameSpace string, imageName string) error {
 	//ctx,cnl := context.WithTimeout(context.Background(), 1000*time.Second)
 	//defer cnl()
-
-
-	_, err := client.Pull(namespaces.WithNamespace(context.Background(), nameSpace),imageName)
-
+	_, err := client.ImageService().Get(namespaces.WithNamespace(context.Background(), nameSpace),imageName)
+	if err == nil {
+		return nil
+	}
+	_, err = client.Pull(namespaces.WithNamespace(context.Background(), nameSpace),imageName)
 	return err
+}
+
+func WriteSpecToFile(fileName string, data []byte) error {
+	fo, err := os.Create(fileName)
+	if err != nil {
+		return err
+	}
+
+	if _, err := fo.Write(data); err != nil {
+		return err
+	}
+
+	if err := fo.Close(); err != nil {
+		return err
+	}
+	return nil
 }
