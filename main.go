@@ -9,6 +9,7 @@ import (
 	"github.com/containerd/containerd/oci"
 	"github.com/sirupsen/logrus"
 	"os"
+	"simpe/pkg/cninetwork"
 	"time"
 )
 
@@ -22,6 +23,28 @@ const (
 
 func main() {
 	startTime := time.Now()
+
+	cni, err := cninetwork.InitNetwork()
+	if err != nil {
+		logrus.WithError(err).Error("cninetwork InitNetwork")
+		return
+	}
+
+	confResult := cni.GetConfig()
+	logrus.Infof("cni config PluginConfDir: %v, PluginDirs: %v, PluginMaxConfNum: %v , Prefix: %v, len(Networks) : %v",
+		confResult.PluginConfDir,
+		confResult.PluginDirs, confResult.PluginMaxConfNum, confResult.Prefix, len(confResult.Networks) )
+	for i, net := range confResult.Networks {
+		logrus.Infof("===== %v ====", i)
+		logrus.Infof("IFName: %v, ConfigName: %v, Source: %v, CNIVersion: %v, len(Plugins) : %v",
+			net.IFName, net.Config.Name, net.Config.Source, net.Config.CNIVersion, len(net.Config.Plugins))
+		for _, plugin := range net.Config.Plugins {
+
+		}
+
+		logrus.Info("============")
+	}
+
 	client, err := containerd.New("/run/containerd/containerd.sock")
 	if err != nil {
 		logrus.WithError(err).Error("containerd new client")
